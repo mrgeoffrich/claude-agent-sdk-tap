@@ -7,7 +7,7 @@
  *
  * @example
  * ```ts
- * import { tappedQuery } from "@anthropic-ai/claude-agent-sdk-tap";
+ * import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
  *
  * for await (const msg of tappedQuery(
  *   { prompt: "Hello", options: {} },

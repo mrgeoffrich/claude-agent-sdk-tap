@@ -1,5 +1,5 @@
 {
-  "name": "@anthropic-ai/claude-agent-sdk-tap",
+  "name": "@mrgeoffrich/claude-agent-sdk-tap",
   "version": "0.1.0",
   "description": "Transparent tap/observer for the Claude Agent SDK message stream with strongly-typed callbacks",
   "type": "module",
@@ -24,6 +24,13 @@
     "prepublishOnly": "npm run build"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mrgeoffrich/claude-agent-sdk-tap.git"
+  },
   "peerDependencies": {
     "@anthropic-ai/claude-agent-sdk": ">=0.2.0"
   },

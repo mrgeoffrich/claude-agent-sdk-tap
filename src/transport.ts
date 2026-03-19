@@ -6,8 +6,8 @@
  *
  * @example
  * ```ts
- * import { tappedQuery } from "@anthropic-ai/claude-agent-sdk-tap";
- * import { createHttpSink } from "@anthropic-ai/claude-agent-sdk-tap/transport";
+ * import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
+ * import { createHttpSink } from "@mrgeoffrich/claude-agent-sdk-tap/transport";
  *
  * const sink = createHttpSink("http://localhost:8080/messages");
  *

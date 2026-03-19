@@ -5,7 +5,7 @@ Transparent tap/observer for the [Claude Agent SDK](https://docs.anthropic.com/e
 ## Install
 
 ```bash
-npm install @anthropic-ai/claude-agent-sdk-tap
+npm install @mrgeoffrich/claude-agent-sdk-tap
 ```
 
 Requires `@anthropic-ai/claude-agent-sdk` >=0.2.0 as a peer dependency.
@@ -13,7 +13,7 @@ Requires `@anthropic-ai/claude-agent-sdk` >=0.2.0 as a peer dependency.
 ## Quick start
 
 ```ts
-import { tappedQuery } from "@anthropic-ai/claude-agent-sdk-tap";
+import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
 
 for await (const msg of tappedQuery(
   { prompt: "Hello", options: {} },
@@ -35,7 +35,7 @@ Wraps any `AsyncIterable<SDKMessage>` (from `query()`, or any other source) and 
 
 ```ts
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { tap } from "@anthropic-ai/claude-agent-sdk-tap";
+import { tap } from "@mrgeoffrich/claude-agent-sdk-tap";
 
 const stream = query({ prompt: "Hello", options: {} });
 
@@ -109,8 +109,8 @@ The `transport` module provides ready-made sinks for forwarding messages to a co
 Zero additional dependencies. Supports batching.
 
 ```ts
-import { tappedQuery } from "@anthropic-ai/claude-agent-sdk-tap";
-import { createHttpSink } from "@anthropic-ai/claude-agent-sdk-tap/transport";
+import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
+import { createHttpSink } from "@mrgeoffrich/claude-agent-sdk-tap/transport";
 
 const sink = createHttpSink("http://localhost:8080/messages");
 
@@ -147,8 +147,8 @@ npm install @grpc/grpc-js
 ```
 
 ```ts
-import { tappedQuery } from "@anthropic-ai/claude-agent-sdk-tap";
-import { createGrpcSink } from "@anthropic-ai/claude-agent-sdk-tap/transport";
+import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
+import { createGrpcSink } from "@mrgeoffrich/claude-agent-sdk-tap/transport";
 
 const sink = await createGrpcSink("localhost:50051");
 
@@ -192,8 +192,8 @@ interface MessageEnvelope {
 You can use typed handlers for local processing while simultaneously forwarding everything to a collection server:
 
 ```ts
-import { tappedQuery } from "@anthropic-ai/claude-agent-sdk-tap";
-import { createHttpSink } from "@anthropic-ai/claude-agent-sdk-tap/transport";
+import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
+import { createHttpSink } from "@mrgeoffrich/claude-agent-sdk-tap/transport";
 
 const sink = createHttpSink("http://collector:8080/messages", {
   batchSize: 20,
@@ -224,7 +224,7 @@ await sink.flush();
 For convenience, this package re-exports `query` and all SDK message types from `@anthropic-ai/claude-agent-sdk`, so you can import everything from one place:
 
 ```ts
-import { tappedQuery, query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk-tap";
+import { tappedQuery, query, type SDKMessage } from "@mrgeoffrich/claude-agent-sdk-tap";
 ```
 
 ## License
