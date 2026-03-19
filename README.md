@@ -10,7 +10,53 @@ npm install @mrgeoffrich/claude-agent-sdk-tap
 
 Requires `@anthropic-ai/claude-agent-sdk` >=0.2.0 as a peer dependency.
 
-## Quick start
+## Forward all messages to your server
+
+The simplest way to use this library is to forward every SDK message to an HTTP endpoint. Three steps:
+
+1. Create a sink pointed at your server
+2. Pass it as `onMessage` when you call the SDK
+3. Call `flush()` when you're done to make sure everything is sent
+
+```ts
+import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
+import { createHttpSink } from "@mrgeoffrich/claude-agent-sdk-tap/transport";
+
+// 1. Point the sink at your server
+const sink = createHttpSink("http://localhost:8080/messages");
+
+// 2. Use tappedQuery instead of query — every message gets POSTed to your server
+for await (const msg of tappedQuery(
+  { prompt: "Hello", options: {} },
+  {},
+  { onMessage: sink.send },
+)) {
+  // your app logic here — messages pass through unchanged
+}
+
+// 3. Flush to ensure nothing is lost
+await sink.flush();
+```
+
+Your server receives a JSON POST for each message with this shape:
+
+```json
+{
+  "sequence": 1,
+  "timestamp": "2026-03-19T08:00:00.000Z",
+  "type": "assistant",
+  "subtype": null,
+  "session_id": "abc-123",
+  "uuid": "msg-456",
+  "message": { /* the raw SDK message */ }
+}
+```
+
+That's it. Every message the SDK produces — assistant responses, tool calls, system events, results — gets forwarded to your endpoint in real time.
+
+## Quick start — typed callbacks
+
+If you don't need to forward messages and just want to react to specific message types locally:
 
 ```ts
 import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
@@ -26,6 +72,8 @@ for await (const msg of tappedQuery(
   // messages pass through unchanged
 }
 ```
+
+You can also combine both — use typed handlers for local logging while forwarding everything to your server. See [Combining handlers and sinks](#combining-handlers-and-sinks) below.
 
 ## API
 
