@@ -267,6 +267,130 @@ for await (const msg of tappedQuery(
 await sink.flush();
 ```
 
+## Receiving messages on your server
+
+If you're building the server that receives tapped messages, here's what to expect and how to handle them.
+
+### What your endpoint receives
+
+The HTTP sink sends a `POST` request with `Content-Type: application/json` for each message (or an array if batching is enabled). Your endpoint just needs to accept JSON and return a 2xx status.
+
+### Express example
+
+```ts
+import express from "express";
+
+const app = express();
+app.use(express.json());
+
+app.post("/messages", (req, res) => {
+  const envelope = req.body;
+
+  console.log(`[${envelope.sequence}] ${envelope.type}${envelope.subtype ? `:${envelope.subtype}` : ""}`);
+
+  // Route by type
+  switch (envelope.type) {
+    case "assistant":
+      console.log("Model response:", envelope.message.message.content);
+      break;
+    case "result":
+      console.log("Session finished. Cost: $" + envelope.message.total_cost_usd);
+      break;
+    case "system":
+      if (envelope.subtype === "init") {
+        console.log("Session started with", envelope.message.tools.length, "tools");
+      }
+      break;
+  }
+
+  res.sendStatus(200);
+});
+
+app.listen(8080);
+```
+
+### Handling batched messages
+
+If the sender uses `batchSize > 1`, your endpoint receives an array instead of a single object. Handle both:
+
+```ts
+app.post("/messages", (req, res) => {
+  const envelopes = Array.isArray(req.body) ? req.body : [req.body];
+
+  for (const envelope of envelopes) {
+    // process each envelope
+    console.log(`[${envelope.sequence}] ${envelope.type}`);
+  }
+
+  res.sendStatus(200);
+});
+```
+
+### Storing messages
+
+Each envelope includes a `sequence` number (monotonically increasing per session) and a `timestamp`, so you can reconstruct the full message timeline. A simple approach is to append to a JSONL file or insert into a database:
+
+```ts
+import { appendFile } from "fs/promises";
+
+app.post("/messages", async (req, res) => {
+  const envelopes = Array.isArray(req.body) ? req.body : [req.body];
+
+  for (const envelope of envelopes) {
+    await appendFile(
+      `session-${envelope.session_id}.jsonl`,
+      JSON.stringify(envelope) + "\n",
+    );
+  }
+
+  res.sendStatus(200);
+});
+```
+
+### Message types you'll see
+
+Here's a quick reference for the most common `type` values and what they mean:
+
+| `type` | `subtype` | What it is |
+|---|---|---|
+| `assistant` | — | A model response (contains `message.content` with text and tool use blocks) |
+| `user` | — | A user message or replayed user message |
+| `result` | — | Session complete — contains `total_cost_usd`, `duration_ms`, `num_turns` |
+| `stream_event` | — | Partial streaming chunk from the model |
+| `tool_progress` | — | Progress update from a running tool |
+| `tool_use_summary` | — | Summary after a tool finishes |
+| `system` | `init` | Session started — contains available `tools` and session info |
+| `system` | `status` | Status update (e.g. "thinking", "running tool") |
+| `system` | `api_retry` | The SDK is retrying an API call |
+| `system` | `hook_started` | A hook began executing |
+| `system` | `hook_response` | A hook finished |
+| `system` | `task_started` | A sub-task was spawned |
+| `system` | `task_progress` | Sub-task progress update |
+
+### Python receiver example
+
+```python
+from flask import Flask, request
+
+app = Flask(__name__)
+
+@app.post("/messages")
+def receive():
+    body = request.json
+    envelopes = body if isinstance(body, list) else [body]
+
+    for env in envelopes:
+        msg_type = env["type"]
+        subtype = env.get("subtype")
+        label = f"{msg_type}:{subtype}" if subtype else msg_type
+        print(f"[{env['sequence']}] {label}")
+
+        if msg_type == "result":
+            print(f"  Cost: ${env['message']['total_cost_usd']}")
+
+    return "", 200
+```
+
 ## Re-exports
 
 For convenience, this package re-exports `query` and all SDK message types from `@anthropic-ai/claude-agent-sdk`, so you can import everything from one place:
