@@ -1,0 +1,40 @@
+{
+  "name": "@anthropic-ai/claude-agent-sdk-tap",
+  "version": "0.1.0",
+  "description": "Transparent tap/observer for the Claude Agent SDK message stream with strongly-typed callbacks",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./transport": {
+      "types": "./dist/transport.d.ts",
+      "default": "./dist/transport.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@anthropic-ai/claude-agent-sdk": ">=0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@grpc/grpc-js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.77",
+    "@grpc/grpc-js": "^1.12.0",
+    "typescript": "^5.9.3"
+  }
+}
