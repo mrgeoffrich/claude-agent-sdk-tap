@@ -389,9 +389,11 @@ async function* emitMessage(
  * Wraps an input AsyncIterable<SDKUserMessage> to tap each outgoing user
  * message through the handlers before forwarding it to the SDK.
  *
- * If a sessionIdHolder is provided and the message has an empty session_id,
- * backfills it from the holder (which is populated by the main tap generator
- * when system:init arrives).
+ * If a sessionIdHolder is provided and a message has an empty session_id but
+ * the holder has no value yet (system:init hasn't arrived), the message is
+ * yielded to the SDK immediately (to avoid deadlock) but handler calls are
+ * deferred. Once the holder is populated, deferred messages are backfilled
+ * and their handlers are fired.
  */
 async function* wrapUserInput(
   source: AsyncIterable<SDKUserMessage>,
@@ -400,14 +402,41 @@ async function* wrapUserInput(
   sessionIdHolder?: SessionIdHolder,
 ): AsyncGenerator<SDKUserMessage> {
   const { onMessage, onError, awaitCallbacks = false } = options;
+  // Messages whose handlers are deferred until session_id is known
+  const deferred: SDKUserMessage[] = [];
+
   for await (const message of source) {
-    // Backfill empty session_id from the shared holder
-    if (sessionIdHolder?.value && "session_id" in message) {
-      const sid = (message as any).session_id;
-      if (typeof sid !== "string" || sid === "") {
-        (message as any).session_id = sessionIdHolder.value;
-      }
+    const sid = "session_id" in message ? (message as any).session_id : undefined;
+    const needsBackfill = sessionIdHolder && (typeof sid !== "string" || sid === "");
+
+    if (needsBackfill && !sessionIdHolder.value) {
+      // No session_id available yet — yield to SDK but defer handler calls.
+      // We can't block here because the SDK must consume this message before
+      // it can emit system:init (which populates the holder).
+      deferred.push(message);
+      yield message;
+      continue;
     }
+
+    // Flush any deferred messages now that we have a session_id
+    if (deferred.length > 0 && sessionIdHolder?.value) {
+      for (const def of deferred) {
+        (def as any).session_id = sessionIdHolder.value;
+        if (onMessage) {
+          await invokeCallback(onMessage, def, def, onError, awaitCallbacks);
+        }
+        if (handlers.user) {
+          await invokeCallback(handlers.user, def, def, onError, awaitCallbacks);
+        }
+      }
+      deferred.length = 0;
+    }
+
+    // Backfill if needed
+    if (needsBackfill && sessionIdHolder.value) {
+      (message as any).session_id = sessionIdHolder.value;
+    }
+
     if (onMessage) {
       await invokeCallback(onMessage, message, message, onError, awaitCallbacks);
     }
@@ -416,6 +445,20 @@ async function* wrapUserInput(
       await invokeCallback(handler, message, message, onError, awaitCallbacks);
     }
     yield message;
+  }
+
+  // If the stream ends with deferred messages still pending (session_id never
+  // arrived), fire handlers anyway so they aren't silently lost.
+  for (const def of deferred) {
+    if (sessionIdHolder?.value) {
+      (def as any).session_id = sessionIdHolder.value;
+    }
+    if (onMessage) {
+      await invokeCallback(onMessage, def, def, onError, awaitCallbacks);
+    }
+    if (handlers.user) {
+      await invokeCallback(handlers.user, def, def, onError, awaitCallbacks);
+    }
   }
 }
 
