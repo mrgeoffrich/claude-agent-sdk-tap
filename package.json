@@ -15,6 +15,13 @@
       "default": "./dist/transport.js"
     }
   },
+  "typesVersions": {
+    "*": {
+      "transport": [
+        "dist/transport.d.ts"
+      ]
+    }
+  },
   "files": [
     "dist"
   ],
