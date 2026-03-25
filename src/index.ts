@@ -51,6 +51,7 @@ import type {
   SDKFilesPersistedEvent,
   SDKElicitationCompleteMessage,
   Options,
+  Query,
 } from "@anthropic-ai/claude-agent-sdk";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -185,6 +186,20 @@ export interface TapOptions {
   awaitCallbacks?: boolean;
 }
 
+/**
+ * A tapped query that yields TapMessage and exposes all Query control methods.
+ *
+ * Created by `tappedQuery()`. Iterate with `for await` to receive tapped
+ * messages. Call control methods (interrupt, streamInput, close, etc.)
+ * directly on the object — they delegate to the underlying Query.
+ *
+ * When using streaming input (prompt as AsyncIterable or via streamInput()),
+ * outgoing user messages are tapped through handlers before being forwarded.
+ */
+export type TappedQuery = AsyncGenerator<TapMessage, void> & {
+  [K in Exclude<keyof Query, keyof AsyncGenerator<any, any>>]: Query[K];
+};
+
 // ── Core ─────────────────────────────────────────────────────────────
 
 /**
@@ -237,6 +252,13 @@ export async function* tap(
 /**
  * Convenience: calls query() and taps the stream in one call.
  *
+ * Returns a `TappedQuery` — an async iterable of tapped messages that also
+ * exposes all `Query` control methods (interrupt, streamInput, close, etc.).
+ *
+ * When the prompt is an `AsyncIterable<SDKUserMessage>` (streaming input mode),
+ * outgoing user messages are tapped through handlers before being forwarded to
+ * the SDK. The same applies to messages sent via `streamInput()`.
+ *
  * Emits a synthetic `tap:query_params` message before the real stream begins,
  * surfacing the query parameters (prompt, system prompt, model, etc.) that
  * are otherwise invisible in the SDK output stream.
@@ -245,8 +267,15 @@ export function tappedQuery(
   params: QueryParams,
   handlers: TapHandlers = {},
   options: TapOptions = {},
-): AsyncGenerator<TapMessage> {
+): TappedQuery {
   const opts = params.options;
+
+  // Wrap input iterable to tap outgoing user messages
+  const wrappedParams =
+    typeof params.prompt === "string"
+      ? params
+      : { ...params, prompt: wrapUserInput(params.prompt, handlers, options) };
+
   const queryParamsMessage: TapQueryParamsMessage = {
     type: "tap:query_params",
     prompt: typeof params.prompt === "string" ? params.prompt : undefined,
@@ -276,10 +305,60 @@ export function tappedQuery(
     settingSources: opts?.settingSources,
     timestamp: new Date().toISOString(),
   };
-  return tap(query(params), handlers, options, queryParamsMessage);
+
+  const q = query(wrappedParams);
+  const tappedStream = tap(q, handlers, options, queryParamsMessage);
+
+  // Return a proxy that delegates iteration to the tapped stream
+  // and control methods to the underlying Query.
+  return new Proxy(tappedStream as unknown as TappedQuery, {
+    get(_target, prop, _receiver) {
+      // Wrap streamInput to tap outgoing user messages
+      if (prop === "streamInput") {
+        return (stream: AsyncIterable<SDKUserMessage>) =>
+          q.streamInput(wrapUserInput(stream, handlers, options));
+      }
+      // AsyncGenerator protocol from tapped stream
+      if (
+        prop === Symbol.asyncIterator ||
+        prop === "next" ||
+        prop === "return" ||
+        prop === "throw"
+      ) {
+        const val = Reflect.get(tappedStream, prop, tappedStream);
+        return typeof val === "function" ? val.bind(tappedStream) : val;
+      }
+      // All other Query control methods delegate to the query
+      const val = (q as any)[prop];
+      if (typeof val === "function") return val.bind(q);
+      return val;
+    },
+  });
 }
 
 // ── Internals ────────────────────────────────────────────────────────
+
+/**
+ * Wraps an input AsyncIterable<SDKUserMessage> to tap each outgoing user
+ * message through the handlers before forwarding it to the SDK.
+ */
+async function* wrapUserInput(
+  source: AsyncIterable<SDKUserMessage>,
+  handlers: TapHandlers,
+  options: TapOptions,
+): AsyncGenerator<SDKUserMessage> {
+  const { onMessage, onError, awaitCallbacks = false } = options;
+  for await (const message of source) {
+    if (onMessage) {
+      await invokeCallback(onMessage, message, message, onError, awaitCallbacks);
+    }
+    const handler = handlers.user;
+    if (handler) {
+      await invokeCallback(handler, message, message, onError, awaitCallbacks);
+    }
+    yield message;
+  }
+}
 
 function resolveHandler(
   message: SDKMessage,
