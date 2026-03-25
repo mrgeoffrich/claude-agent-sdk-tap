@@ -198,15 +198,24 @@ export interface TapOptions {
  */
 export type TappedQuery = AsyncGenerator<TapMessage, void> & {
   [K in Exclude<keyof Query, keyof AsyncGenerator<any, any>>]: Query[K];
+} & {
+  /** The session ID captured from the stream. Updated as messages arrive. */
+  readonly sessionId: string | undefined;
 };
 
 // ── Core ─────────────────────────────────────────────────────────────
+
+/** Shared session-ID state mutated by the tap generator and read via the proxy. */
+interface SessionIdHolder {
+  value: string | undefined;
+}
 
 async function* tap(
   source: AsyncIterable<SDKMessage>,
   handlers: TapHandlers = {},
   options: TapOptions = {},
   queryParamsMessage?: TapQueryParamsMessage,
+  sessionIdHolder?: SessionIdHolder,
 ): AsyncGenerator<TapMessage> {
   const { onMessage, onError, awaitCallbacks = false } = options;
 
@@ -222,20 +231,40 @@ async function* tap(
     yield queryParamsMessage;
   }
 
+  // Buffer messages that arrive before a session_id is known.
+  // Once a message with a real session_id arrives, backfill and flush.
+  const pendingBuffer: SDKMessage[] = [];
+
   for await (const message of source) {
-    // 1. Catch-all
-    if (onMessage) {
-      await invokeCallback(onMessage, message, message, onError, awaitCallbacks);
+    if (sessionIdHolder) {
+      const sid = (message as any).session_id;
+      if (typeof sid === "string" && sid !== "") {
+        // Captured a real session_id — update the holder
+        sessionIdHolder.value = sid;
+
+        // Flush any buffered messages with the now-known session_id
+        for (const buffered of pendingBuffer) {
+          (buffered as any).session_id = sessionIdHolder.value;
+          yield* emitMessage(buffered, handlers, onMessage, onError, awaitCallbacks);
+        }
+        pendingBuffer.length = 0;
+      } else if (!sessionIdHolder.value && "session_id" in message) {
+        // No session_id yet — buffer this message
+        pendingBuffer.push(message);
+        continue;
+      } else if (sessionIdHolder.value && "session_id" in message) {
+        // We have a session_id and this message is missing one — backfill
+        (message as any).session_id = sessionIdHolder.value;
+      }
     }
 
-    // 2. Type-specific handler
-    const handler = resolveHandler(message, handlers);
-    if (handler) {
-      await invokeCallback(handler, message, message, onError, awaitCallbacks);
-    }
+    yield* emitMessage(message, handlers, onMessage, onError, awaitCallbacks);
+  }
 
-    // 3. Yield unchanged
-    yield message;
+  // If the stream ends without ever providing a session_id, flush remaining
+  // buffered messages as-is so they aren't silently swallowed.
+  for (const buffered of pendingBuffer) {
+    yield* emitMessage(buffered, handlers, onMessage, onError, awaitCallbacks);
   }
 }
 
@@ -296,13 +325,22 @@ export function tappedQuery(
     timestamp: new Date().toISOString(),
   };
 
+  // Shared mutable holder so the proxy can expose the latest session ID.
+  const sessionIdHolder: SessionIdHolder = {
+    value: queryParamsMessage.sessionId ?? queryParamsMessage.resume ?? undefined,
+  };
+
   const q = query(wrappedParams);
-  const tappedStream = tap(q, handlers, options, queryParamsMessage);
+  const tappedStream = tap(q, handlers, options, queryParamsMessage, sessionIdHolder);
 
   // Return a proxy that delegates iteration to the tapped stream
   // and control methods to the underlying Query.
   return new Proxy(tappedStream as unknown as TappedQuery, {
     get(_target, prop, _receiver) {
+      // Expose the tracked session ID
+      if (prop === "sessionId") {
+        return sessionIdHolder.value;
+      }
       // Wrap streamInput to tap outgoing user messages
       if (prop === "streamInput") {
         return (stream: AsyncIterable<SDKUserMessage>) =>
@@ -327,6 +365,24 @@ export function tappedQuery(
 }
 
 // ── Internals ────────────────────────────────────────────────────────
+
+/** Run onMessage + type-specific handler, then yield the message. */
+async function* emitMessage(
+  message: SDKMessage,
+  handlers: TapHandlers,
+  onMessage: TapOptions["onMessage"],
+  onError: TapOptions["onError"],
+  awaitCallbacks: boolean,
+): AsyncGenerator<SDKMessage> {
+  if (onMessage) {
+    await invokeCallback(onMessage, message, message, onError, awaitCallbacks);
+  }
+  const handler = resolveHandler(message, handlers);
+  if (handler) {
+    await invokeCallback(handler, message, message, onError, awaitCallbacks);
+  }
+  yield message;
+}
 
 /**
  * Wraps an input AsyncIterable<SDKUserMessage> to tap each outgoing user
