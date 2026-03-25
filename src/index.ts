@@ -50,11 +50,78 @@ import type {
   SDKLocalCommandOutputMessage,
   SDKFilesPersistedEvent,
   SDKElicitationCompleteMessage,
+  Options,
 } from "@anthropic-ai/claude-agent-sdk";
 
 // ── Types ────────────────────────────────────────────────────────────
 
 type QueryParams = Parameters<typeof query>[0];
+
+/** Union of all messages the tap can yield: real SDK messages + synthetic tap messages. */
+export type TapMessage = SDKMessage | TapQueryParamsMessage;
+
+/**
+ * Synthetic message emitted by `tappedQuery` before the real stream begins.
+ * Surfaces the query parameters (prompt, system prompt, model, etc.) that are
+ * otherwise invisible in the SDK output stream.
+ *
+ * Discriminated by `type: "tap:query_params"`.
+ */
+export interface TapQueryParamsMessage {
+  type: "tap:query_params";
+  /** The user prompt passed to query(). Undefined when prompt is an AsyncIterable. */
+  prompt?: string;
+  /** System prompt configuration. */
+  systemPrompt?: Options["systemPrompt"];
+  /** Model identifier. */
+  model?: string;
+  /** Working directory. */
+  cwd?: string;
+  /** Permission mode. */
+  permissionMode?: Options["permissionMode"];
+  /** Maximum conversation turns. */
+  maxTurns?: number;
+  /** Maximum budget in USD. */
+  maxBudgetUsd?: number;
+  /** Thinking/reasoning configuration. */
+  thinking?: Options["thinking"];
+  /** Effort level. */
+  effort?: Options["effort"];
+  /** Agent name for the main thread. */
+  agent?: string;
+  /** Agent definitions. */
+  agents?: Options["agents"];
+  /** Tools configuration. */
+  tools?: Options["tools"];
+  /** Auto-allowed tool names. */
+  allowedTools?: string[];
+  /** Disallowed tool names. */
+  disallowedTools?: string[];
+  /** MCP server configurations (names only — configs may contain secrets). */
+  mcpServers?: string[];
+  /** Plugin configurations. */
+  plugins?: Options["plugins"];
+  /** Output format configuration. */
+  outputFormat?: Options["outputFormat"];
+  /** Whether continuing a previous session. */
+  continue?: boolean;
+  /** Session ID being resumed. */
+  resume?: string;
+  /** Specific session ID. */
+  sessionId?: string;
+  /** Beta features enabled. */
+  betas?: Options["betas"];
+  /** Whether partial/streaming messages are included. */
+  includePartialMessages?: boolean;
+  /** Whether prompt suggestions are enabled. */
+  promptSuggestions?: boolean;
+  /** Additional directories. */
+  additionalDirectories?: string[];
+  /** Setting sources loaded. */
+  settingSources?: Options["settingSources"];
+  /** ISO timestamp when the message was created. */
+  timestamp: string;
+}
 
 /** A callback that receives a strongly-typed message. May be sync or async. */
 export type TapCallback<T> = (message: T) => void | Promise<void>;
@@ -68,6 +135,9 @@ export type TapCallback<T> = (message: T) => void | Promise<void>;
  * All handlers are optional.
  */
 export interface TapHandlers {
+  // ── Tap synthetic types ──
+  "tap:query_params"?: TapCallback<TapQueryParamsMessage>;
+
   // ── Non-system types ──
   assistant?: TapCallback<SDKAssistantMessage>;
   user?: TapCallback<SDKUserMessage | SDKUserMessageReplay>;
@@ -100,13 +170,13 @@ export interface TapOptions {
    * Called for every message before the specific handler.
    * Useful for logging or forwarding all messages to another system.
    */
-  onMessage?: TapCallback<SDKMessage>;
+  onMessage?: TapCallback<TapMessage>;
 
   /**
    * Called when a handler throws. If not provided, errors are silently
    * swallowed. The stream is never interrupted by a bad callback.
    */
-  onError?: (error: unknown, message: SDKMessage) => void;
+  onError?: (error: unknown, message: TapMessage) => void;
 
   /**
    * When true, async callbacks are awaited before yielding the message.
@@ -124,14 +194,28 @@ export interface TapOptions {
  * @param source - Any AsyncIterable<SDKMessage> (from query(), instrumentedQuery(), etc.)
  * @param handlers - Per-type callbacks. System subtypes use "system:<subtype>" keys.
  * @param options - Catch-all, error handling, and await behavior.
- * @returns An AsyncGenerator<SDKMessage> that yields every message unchanged.
+ * @param queryParamsMessage - When provided, emitted before the real stream begins.
+ * @returns An AsyncGenerator that yields a synthetic query_params message (if provided) followed by every SDK message unchanged.
  */
 export async function* tap(
   source: AsyncIterable<SDKMessage>,
   handlers: TapHandlers = {},
   options: TapOptions = {},
-): AsyncGenerator<SDKMessage> {
+  queryParamsMessage?: TapQueryParamsMessage,
+): AsyncGenerator<TapMessage> {
   const { onMessage, onError, awaitCallbacks = false } = options;
+
+  // Emit synthetic query params message before the real stream
+  if (queryParamsMessage) {
+    if (onMessage) {
+      await invokeCallback(onMessage, queryParamsMessage, queryParamsMessage, onError, awaitCallbacks);
+    }
+    const handler = handlers["tap:query_params"];
+    if (handler) {
+      await invokeCallback(handler, queryParamsMessage, queryParamsMessage, onError, awaitCallbacks);
+    }
+    yield queryParamsMessage;
+  }
 
   for await (const message of source) {
     // 1. Catch-all
@@ -152,14 +236,47 @@ export async function* tap(
 
 /**
  * Convenience: calls query() and taps the stream in one call.
- * Equivalent to `tap(query(params), handlers, options)`.
+ *
+ * Emits a synthetic `tap:query_params` message before the real stream begins,
+ * surfacing the query parameters (prompt, system prompt, model, etc.) that
+ * are otherwise invisible in the SDK output stream.
  */
 export function tappedQuery(
   params: QueryParams,
   handlers: TapHandlers = {},
   options: TapOptions = {},
-): AsyncGenerator<SDKMessage> {
-  return tap(query(params), handlers, options);
+): AsyncGenerator<TapMessage> {
+  const opts = params.options;
+  const queryParamsMessage: TapQueryParamsMessage = {
+    type: "tap:query_params",
+    prompt: typeof params.prompt === "string" ? params.prompt : undefined,
+    systemPrompt: opts?.systemPrompt,
+    model: opts?.model,
+    cwd: opts?.cwd,
+    permissionMode: opts?.permissionMode,
+    maxTurns: opts?.maxTurns,
+    maxBudgetUsd: opts?.maxBudgetUsd,
+    thinking: opts?.thinking,
+    effort: opts?.effort,
+    agent: opts?.agent,
+    agents: opts?.agents,
+    tools: opts?.tools,
+    allowedTools: opts?.allowedTools,
+    disallowedTools: opts?.disallowedTools,
+    mcpServers: opts?.mcpServers ? Object.keys(opts.mcpServers) : undefined,
+    plugins: opts?.plugins,
+    outputFormat: opts?.outputFormat,
+    continue: opts?.continue,
+    resume: opts?.resume,
+    sessionId: opts?.sessionId,
+    betas: opts?.betas,
+    includePartialMessages: opts?.includePartialMessages,
+    promptSuggestions: opts?.promptSuggestions,
+    additionalDirectories: opts?.additionalDirectories,
+    settingSources: opts?.settingSources,
+    timestamp: new Date().toISOString(),
+  };
+  return tap(query(params), handlers, options, queryParamsMessage);
 }
 
 // ── Internals ────────────────────────────────────────────────────────
@@ -178,7 +295,7 @@ function resolveHandler(
 async function invokeCallback<T>(
   callback: TapCallback<T>,
   value: T,
-  originalMessage: SDKMessage,
+  originalMessage: TapMessage,
   onError: TapOptions["onError"],
   awaitCallbacks: boolean,
 ): Promise<void> {

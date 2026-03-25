@@ -1,7 +1,7 @@
 /**
  * Transport sinks for forwarding SDK messages over HTTP or gRPC.
  *
- * Each `create*Sink` function returns a `TapCallback<SDKMessage>` that
+ * Each `create*Sink` function returns a `TapCallback<TapMessage>` that
  * can be plugged straight into `onMessage`.
  *
  * @example
@@ -21,7 +21,7 @@
  * ```
  */
 
-import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import type { TapMessage } from "./index.js";
 
 // ── Envelope ─────────────────────────────────────────────────────────
 
@@ -39,11 +39,11 @@ export interface MessageEnvelope {
   session_id: string;
   /** Message UUID */
   uuid: string;
-  /** The raw SDKMessage, unmodified */
-  message: SDKMessage;
+  /** The raw TapMessage, unmodified */
+  message: TapMessage;
 }
 
-function toEnvelope(msg: SDKMessage, sequence: number): MessageEnvelope {
+function toEnvelope(msg: TapMessage, sequence: number): MessageEnvelope {
   return {
     sequence,
     timestamp: new Date().toISOString(),
@@ -73,7 +73,7 @@ export interface HttpSinkOptions {
 
 export interface HttpSink {
   /** The callback to pass to `onMessage`. */
-  send: (message: SDKMessage) => void;
+  send: (message: TapMessage) => void;
   /** Flush any buffered messages and stop the flush timer. */
   flush: () => Promise<void>;
 }
@@ -129,7 +129,7 @@ export function createHttpSink(url: string, options: HttpSinkOptions = {}): Http
   }
 
   return {
-    send(message: SDKMessage): void {
+    send(message: TapMessage): void {
       buffer.push(toEnvelope(message, ++sequence));
       if (buffer.length >= batchSize) {
         flushBuffer();
@@ -158,7 +158,7 @@ export interface GrpcSinkOptions {
 
 export interface GrpcSink {
   /** The callback to pass to `onMessage`. */
-  send: (message: SDKMessage) => void;
+  send: (message: TapMessage) => void;
   /** End the gRPC stream and wait for completion. */
   flush: () => Promise<void>;
 }
@@ -220,7 +220,7 @@ export async function createGrpcSink(
   });
 
   return {
-    send(message: SDKMessage): void {
+    send(message: TapMessage): void {
       if (streamError) return;
       try {
         const envelope = toEnvelope(message, ++sequence);
