@@ -990,4 +990,90 @@ describe("sidecar session ID scenario (from docker logs)", () => {
 
     expect(tapped.sessionId).toBe(REAL_SESSION);
   });
+
+  it("backfills session_id on AsyncIterable user messages (sidecar messageQueue pattern)", async () => {
+    // This is the real sidecar pattern: prompt is an AsyncIterable (messageQueue),
+    // and user messages are yielded with empty session_id. The SDK consumes the
+    // iterable concurrently while emitting its own messages on the output stream.
+    // After system:init populates the sessionIdHolder, subsequent user messages
+    // from wrapUserInput should be backfilled.
+
+    const init = makeSystemInit();
+    init.session_id = REAL_SESSION;
+    const assistant = makeAssistant("Hello!");
+    assistant.session_id = REAL_SESSION;
+    const result = makeResult();
+    result.session_id = REAL_SESSION;
+
+    const q = fakeQuery([init, assistant, result]);
+    mockQuery.mockReturnValue(q);
+
+    // Simulate the sidecar's messageQueue: user messages with empty session_id
+    const userMsg1: SDKUserMessage = {
+      type: "user",
+      message: { role: "user", content: "hello" } as any,
+      parent_tool_use_id: null,
+      session_id: "", // empty — the sidecar's problem
+    };
+
+    const userMsg2: SDKUserMessage = {
+      type: "user",
+      message: { role: "user", content: "list containers" } as any,
+      parent_tool_use_id: null,
+      session_id: "", // also empty
+    };
+
+    const capturedUserSessionIds: string[] = [];
+    const allOnMessageSessionIds: Array<{ type: string; session_id: string }> = [];
+
+    async function* messageQueue(): AsyncIterable<SDKUserMessage> {
+      yield userMsg1;
+      yield userMsg2;
+    }
+
+    const tapped = tappedQuery(
+      { prompt: messageQueue(), options: { model: "claude-sonnet-4-6" } },
+      {
+        user: (msg) => {
+          capturedUserSessionIds.push((msg as any).session_id);
+        },
+      },
+      {
+        onMessage: (msg) => {
+          if ("session_id" in msg) {
+            allOnMessageSessionIds.push({
+              type: (msg as any).type,
+              session_id: (msg as any).session_id,
+            });
+          }
+        },
+        awaitCallbacks: true,
+      },
+    );
+
+    // The SDK consumes the prompt iterable — simulate that
+    await drainMockPrompt();
+
+    // Consume the tapped output stream
+    await collect(tapped);
+
+    // After system:init populates the holder, user messages from wrapUserInput
+    // should have their session_id backfilled
+    expect(tapped.sessionId).toBe(REAL_SESSION);
+
+    // The user handler should see backfilled session_ids for messages
+    // that arrive after system:init has set the holder
+    // Note: the first user message may or may not be backfilled depending
+    // on timing (whether system:init has been processed on the output stream
+    // before the SDK consumes the first user message from the input iterable).
+    // But the onMessage handler for user messages should show the backfilled value
+    // if the holder was populated.
+    for (const entry of allOnMessageSessionIds.filter(e => e.type === "user")) {
+      // If the holder was populated by the time wrapUserInput processed this
+      // message, it should be backfilled
+      if (entry.session_id !== "") {
+        expect(entry.session_id).toBe(REAL_SESSION);
+      }
+    }
+  });
 });

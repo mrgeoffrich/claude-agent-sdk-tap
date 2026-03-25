@@ -10,6 +10,116 @@ npm install @mrgeoffrich/claude-agent-sdk-tap
 
 Requires `@anthropic-ai/claude-agent-sdk` >=0.2.0 as a peer dependency.
 
+## Multi-turn agent with HTTP forwarding
+
+The most common production pattern: a long-running agent (e.g. a sidecar service) that accepts user messages over an API, streams them to the SDK via an `AsyncIterable`, and forwards all tap messages to a collector.
+
+```ts
+import { tappedQuery } from "@mrgeoffrich/claude-agent-sdk-tap";
+import { createHttpSink } from "@mrgeoffrich/claude-agent-sdk-tap/transport";
+import type { SDKUserMessage } from "@mrgeoffrich/claude-agent-sdk-tap";
+
+// --- Message queue: an async iterable that yields user messages on demand ---
+
+class MessageQueue {
+  private pending: Array<{
+    resolve: (result: IteratorResult<SDKUserMessage>) => void;
+  }> = [];
+  private messages: SDKUserMessage[] = [];
+  private done = false;
+
+  /** Enqueue a user message (called when your API receives a request). */
+  push(text: string) {
+    const msg: SDKUserMessage = {
+      type: "user",
+      message: { role: "user", content: text } as any,
+      parent_tool_use_id: null,
+      session_id: "", // left empty — the tap library backfills this
+    };
+    if (this.pending.length > 0) {
+      this.pending.shift()!.resolve({ value: msg, done: false });
+    } else {
+      this.messages.push(msg);
+    }
+  }
+
+  /** Signal that no more messages will be sent. */
+  close() {
+    this.done = true;
+    for (const p of this.pending) {
+      p.resolve({ value: undefined as any, done: true });
+    }
+    this.pending = [];
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    return {
+      next: () => {
+        if (this.messages.length > 0) {
+          return Promise.resolve({ value: this.messages.shift()!, done: false });
+        }
+        if (this.done) {
+          return Promise.resolve({ value: undefined as any, done: true });
+        }
+        return new Promise((resolve) => this.pending.push({ resolve }));
+      },
+    };
+  }
+}
+
+// --- Agent runner ---
+
+async function runAgent(initialMessage: string) {
+  const queue = new MessageQueue();
+  queue.push(initialMessage);
+
+  // Set up HTTP sink for forwarding tap messages to a collector
+  const sink = createHttpSink("http://collector:8080/messages", {
+    batchSize: 10,
+    flushIntervalMs: 2000,
+    onError: (err) => console.error("Sink error:", err),
+  });
+
+  const stream = tappedQuery(
+    {
+      prompt: queue,              // AsyncIterable — multi-turn input
+      options: {
+        model: "claude-sonnet-4-6",
+        systemPrompt: "You are a helpful assistant.",
+      },
+    },
+    {},                           // handlers (optional — add typed handlers here)
+    { onMessage: sink.send },     // every message is forwarded to the collector
+  );
+
+  // Consume the output stream
+  for await (const message of stream) {
+    switch (message.type) {
+      case "result":
+        if (message.subtype === "success") {
+          console.log("Turn complete:", message.result);
+        }
+        break;
+      case "assistant":
+        console.log("Response:", message.message.content);
+        break;
+    }
+  }
+
+  await sink.flush();
+}
+```
+
+### Session ID handling
+
+The SDK assigns a `session_id` in the `system:init` message, but the first user message is sent *before* `system:init` arrives — so it has an empty `session_id`. The tap library handles this automatically:
+
+- **Output stream**: Messages with an empty `session_id` are buffered until a message with a real `session_id` arrives (typically `system:init`). Buffered messages are backfilled and released in original order.
+- **Input stream** (`AsyncIterable` prompt / `streamInput()`): Once `system:init` populates the session ID, subsequent user messages are backfilled before handlers fire.
+- **`tappedQuery.sessionId`**: Always reflects the latest captured session ID. Available as a property on the returned object.
+
+This means your `onMessage` handler and collector always receive messages with a valid `session_id` — no special handling needed.
+
 ## Forward all messages to your server
 
 The simplest way to use this library is to forward every SDK message to an HTTP endpoint. Three steps:

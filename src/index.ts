@@ -289,12 +289,6 @@ export function tappedQuery(
 ): TappedQuery {
   const opts = params.options;
 
-  // Wrap input iterable to tap outgoing user messages
-  const wrappedParams =
-    typeof params.prompt === "string"
-      ? params
-      : { ...params, prompt: wrapUserInput(params.prompt, handlers, options) };
-
   const queryParamsMessage: TapQueryParamsMessage = {
     type: "tap:query_params",
     prompt: typeof params.prompt === "string" ? params.prompt : undefined,
@@ -326,9 +320,16 @@ export function tappedQuery(
   };
 
   // Shared mutable holder so the proxy can expose the latest session ID.
+  // Created before wrapUserInput so outgoing user messages can be backfilled.
   const sessionIdHolder: SessionIdHolder = {
     value: queryParamsMessage.sessionId ?? queryParamsMessage.resume ?? undefined,
   };
+
+  // Wrap input iterable to tap outgoing user messages
+  const wrappedParams =
+    typeof params.prompt === "string"
+      ? params
+      : { ...params, prompt: wrapUserInput(params.prompt, handlers, options, sessionIdHolder) };
 
   const q = query(wrappedParams);
   const tappedStream = tap(q, handlers, options, queryParamsMessage, sessionIdHolder);
@@ -344,7 +345,7 @@ export function tappedQuery(
       // Wrap streamInput to tap outgoing user messages
       if (prop === "streamInput") {
         return (stream: AsyncIterable<SDKUserMessage>) =>
-          q.streamInput(wrapUserInput(stream, handlers, options));
+          q.streamInput(wrapUserInput(stream, handlers, options, sessionIdHolder));
       }
       // AsyncGenerator protocol from tapped stream
       if (
@@ -387,14 +388,26 @@ async function* emitMessage(
 /**
  * Wraps an input AsyncIterable<SDKUserMessage> to tap each outgoing user
  * message through the handlers before forwarding it to the SDK.
+ *
+ * If a sessionIdHolder is provided and the message has an empty session_id,
+ * backfills it from the holder (which is populated by the main tap generator
+ * when system:init arrives).
  */
 async function* wrapUserInput(
   source: AsyncIterable<SDKUserMessage>,
   handlers: TapHandlers,
   options: TapOptions,
+  sessionIdHolder?: SessionIdHolder,
 ): AsyncGenerator<SDKUserMessage> {
   const { onMessage, onError, awaitCallbacks = false } = options;
   for await (const message of source) {
+    // Backfill empty session_id from the shared holder
+    if (sessionIdHolder?.value && "session_id" in message) {
+      const sid = (message as any).session_id;
+      if (typeof sid !== "string" || sid === "") {
+        (message as any).session_id = sessionIdHolder.value;
+      }
+    }
     if (onMessage) {
       await invokeCallback(onMessage, message, message, onError, awaitCallbacks);
     }
