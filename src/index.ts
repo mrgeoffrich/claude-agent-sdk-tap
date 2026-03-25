@@ -202,17 +202,7 @@ export type TappedQuery = AsyncGenerator<TapMessage, void> & {
 
 // ── Core ─────────────────────────────────────────────────────────────
 
-/**
- * Wraps an SDKMessage async iterable, calling strongly-typed handlers
- * for each message type without modifying the stream.
- *
- * @param source - Any AsyncIterable<SDKMessage> (from query(), instrumentedQuery(), etc.)
- * @param handlers - Per-type callbacks. System subtypes use "system:<subtype>" keys.
- * @param options - Catch-all, error handling, and await behavior.
- * @param queryParamsMessage - When provided, emitted before the real stream begins.
- * @returns An AsyncGenerator that yields a synthetic query_params message (if provided) followed by every SDK message unchanged.
- */
-export async function* tap(
+async function* tap(
   source: AsyncIterable<SDKMessage>,
   handlers: TapHandlers = {},
   options: TapOptions = {},
@@ -394,7 +384,6 @@ async function invokeCallback<T>(
 
 // ── Re-exports ───────────────────────────────────────────────────────
 
-export { query } from "@anthropic-ai/claude-agent-sdk";
 export type {
   SDKMessage,
   SDKAssistantMessage,
@@ -402,13 +391,11 @@ export type {
   SDKUserMessageReplay,
   SDKResultSuccess,
   SDKResultError,
-  SDKResultMessage,
   SDKPartialAssistantMessage,
   SDKToolProgressMessage,
   SDKToolUseSummaryMessage,
   SDKAuthStatusMessage,
   SDKRateLimitEvent,
-  SDKRateLimitInfo,
   SDKPromptSuggestionMessage,
   SDKSystemMessage,
   SDKAPIRetryMessage,
@@ -423,10 +410,6 @@ export type {
   SDKLocalCommandOutputMessage,
   SDKFilesPersistedEvent,
   SDKElicitationCompleteMessage,
-  SDKAssistantMessageError,
-  SDKPermissionDenial,
-  SDKStatus,
-  SDKSessionInfo,
   Options,
   Query,
 } from "@anthropic-ai/claude-agent-sdk";
