@@ -49,9 +49,9 @@
     }
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.77",
-    "@grpc/grpc-js": "^1.12.0",
-    "typescript": "^5.9.3",
-    "vitest": "^4.1.1"
+    "@anthropic-ai/claude-agent-sdk": "^0.2.126",
+    "@grpc/grpc-js": "^1.14.3",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
   }
 }
